@@ -1,0 +1,15 @@
+# pnpm 11 不再读 package.json 的 pnpm 字段，设置挪到了这里。
+
+# esbuild 是 wxt 的打包器（不跑它的构建脚本就没有可用的 wxt 二进制），
+# spawn-sync 是 page-agent 的依赖。列出来批准。
+onlyBuiltDependencies:
+  - esbuild
+  - spawn-sync
+
+# 别在每次 pnpm run 之前自动跑一次 install。
+#
+# pnpm 的 verifyDepsBeforeRun 默认会在 `pnpm test` 之类命令前检查依赖状态并
+# 尝试自动安装。esbuild/spawn-sync 的构建脚本一旦因为任何原因没被批准，
+# install 就返回非零，于是**测试命令本身**在装依赖那一步就挂了 —— 报的还是
+# 装依赖的错，跟测试没关系，排查时容易看成「测试跑不起来」。
+verifyDepsBeforeRun: false

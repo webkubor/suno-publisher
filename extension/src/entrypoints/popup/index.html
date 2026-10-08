@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8" /><title>VoxFlow 发行助手</title>
+<style>
+  body { width: 320px; margin: 0; padding: 14px; font: 13px/1.6 -apple-system, sans-serif; color: #222; }
+  h1 { font-size: 14px; margin: 0 0 10px; }
+  label { display: block; margin-top: 8px; font-size: 12px; color: #666; }
+  input, select { width: 100%; box-sizing: border-box; padding: 5px 7px; border: 1px solid #ddd; border-radius: 5px; font-size: 12px; }
+  button { width: 100%; margin-top: 12px; padding: 8px; border: 0; border-radius: 6px; background: #cc584d; color: #fff; font-size: 13px; cursor: pointer; }
+  button:disabled { background: #bbb; cursor: default; }
+  .tip { margin-top: 10px; font-size: 11px; color: #888; }
+  .err { color: #cc584d; }
+</style>
+</head>
+<body>
+  <h1>VoxFlow 发行助手</h1>
+  <label>待发行曲目</label>
+  <select id="track"><option>读取中…</option></select>
+  <label>模型</label>
+  <input id="model" placeholder="qwen3.5-plus" />
+  <label>baseURL</label>
+  <input id="baseURL" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+  <label>API Key</label>
+  <input id="apiKey" type="password" placeholder="sk-..." />
+  <button id="go" disabled>开始填表</button>
+  <p class="tip" id="tip">填到签署协议前为止，提交那一下留给你。</p>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

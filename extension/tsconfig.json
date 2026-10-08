@@ -1,0 +1,11 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    // 自检用 `node --experimental-strip-types` 跑，Node 要求 import 带 .ts 后缀。
+    // 不开这个选项 tsc 会报 TS5097 —— 报错说「不能以 .ts 结尾」，但那个写法
+    // 恰恰是 Node 要求的，两边只能迁就 Node。
+    "allowImportingTsExtensions": true
+  }
+}
