@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/webkubor/suno-publisher/schemas/platforms.schema.json",
+  "title": "平台发行知识",
+  "description": "校验 ~/.suno-publisher/configs/platforms.json 的结构。只管结构对不对，不管平台页面是否还是这样 —— 后者靠每个平台的 verified_at 记录实测时间。",
+  "type": "object",
+  "required": ["_说明"],
+  "additionalProperties": {
+    "$ref": "#/definitions/platform"
+  },
+  "definitions": {
+    "platform": {
+      "type": "object",
+      "required": ["label"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "平台显示名，加平台时唯一必填项"
+        },
+        "verified_at": {
+          "type": ["string", "null"],
+          "description": "最近一次实测时间。null = 从没实测过，发行前必须自己走一遍。"
+        },
+        "console": {
+          "type": "string",
+          "description": "平台后台地址"
+        },
+        "reach": {
+          "type": "string",
+          "description": "发行覆盖面说明（如「代发到字节系 + 全球 150+ 流媒体」）"
+        },
+        "entries": {
+          "type": "object",
+          "description": "发行入口。single = 单曲，batch = 批量",
+          "properties": {
+            "single": { "$ref": "#/definitions/entry" },
+            "batch": { "$ref": "#/definitions/entry" }
+          }
+        },
+        "audio": {
+          "type": "object",
+          "description": "音频格式要求",
+          "properties": {
+            "formats": { "type": "array", "items": { "type": "string" } },
+            "prefer": { "type": "string", "description": "首选转码目标（如 320k MP3）" },
+            "note": { "type": "string" }
+          }
+        },
+        "cover": {
+          "type": "object",
+          "description": "封面要求。min_size 是 loader 唯一会派生的字段",
+          "properties": {
+            "min_size": { "type": "string", "description": "如 1440x1440；未确认写「待确认」" },
+            "ratio": { "type": "string" },
+            "formats": { "type": "array", "items": { "type": "string" } },
+            "max_mb": { "type": ["number", "null"] },
+            "note": { "type": "string" }
+          }
+        },
+        "ai_declaration": {
+          "description": "AI 创作声明。可能是对象，也可能是字符串",
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "field": { "type": "string", "description": "页面上这个字段叫什么" },
+                "value": { "type": "string" },
+                "tool": { "type": "string", "description": "要声明的 AI 工具名" },
+                "strict": { "type": "boolean", "description": "true = 严禁选相反项" },
+                "note": { "type": "string" }
+              }
+            },
+            { "type": "string" }
+          ]
+        },
+        "form_fields": {
+          "type": "object",
+          "properties": {
+            "required": { "type": "array", "items": { "type": "string" } },
+            "optional": { "type": "array", "items": { "type": "string" } },
+            "note": { "type": "string" }
+          }
+        },
+        "batch_upload": {
+          "type": "object",
+          "description": "批量上传协议。汽水走本地 HTTP 收件端 + Excel 模板",
+          "properties": {
+            "protocol": { "type": "string" },
+            "host_example": { "type": "string" },
+            "port": { "type": "integer" },
+            "layout": { "type": "string" },
+            "excel": { "type": "string", "description": "仓库内模板路径" },
+            "note": { "type": "string" }
+          }
+        },
+        "revenue": {
+          "type": ["string", "null"],
+          "description": "收益区间。示例文件一律 null"
+        },
+        "steps": {
+          "type": "object",
+          "description": "平台发行流程的分步说明。汽水是三步：上传作品 / 授权作品 / 签署协议",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "fields": { "type": "array", "items": { "type": "string" } },
+              "note": { "type": "string" },
+              "坑": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "实测踩出来的坑。示例文件里是空数组 —— 知识要自己攒"
+              },
+              "automation": { "type": "string" }
+            }
+          }
+        },
+        "签约模式": {
+          "type": "object",
+          "description": "⚠️ 个人商业状态，示例文件里整节不存在",
+          "properties": {
+            "options": { "type": "array", "items": { "type": "string" } },
+            "chosen": { "type": "string" },
+            "_差别": { "type": "string" },
+            "_选它的理由": { "type": "string" },
+            "_未确认": { "type": "string" }
+          }
+        },
+        "automation_boundary": {
+          "type": "string",
+          "description": "自动化的边界。不可逆动作一律停手留给人"
+        },
+        "自动化前置条件": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "错误检测": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "怎么判断填错了。坑：字段级提示是普通颜色文字，关键词扫正文会把字段标签当错误"
+        }
+      }
+    }
+  }
+}

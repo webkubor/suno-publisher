@@ -1,0 +1,28 @@
+[project]
+name = "suno-publisher"
+version = "0.1.0"
+description = "音乐发行工具 —— 把 AI 生成的歌填进音乐平台发行表单，停在不可逆动作之前"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "webkubor" }]
+keywords = ["music", "publish", "distribution", "suno", "automation"]
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# 发布脚本要驱动浏览器填表；主仓本身只做台账和 HTTP 契约，不装这些。
+automation = [
+    "playwright>=1.40",
+]
+
+[project.scripts]
+suno-publisher = "cli.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "cli*"]

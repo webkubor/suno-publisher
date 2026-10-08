@@ -1,0 +1,40 @@
+# 本机数据 —— 全部不进仓库
+/data/
+/out/
+*.db
+*.db-wal
+*.db-shm
+
+# 平台发行知识是个人资产：含签约模式、账号入驻名额、收益区间
+configs/platforms.json
+
+# 艺人档案含真实姓名（版权登记和收益结算按法律姓名走）
+configs/artist.json
+
+# 平台账号台账只存显示名和状态，不存凭据 —— 但仍属个人数据
+configs/platform_accounts.json
+
+# 发行物料：音频和封面体积大，重新 pack 一次就有
+/out/待上传/
+
+# 模板要进 git —— 它是项目资产不是产物，丢了打包会在最后一步失败
+!/templates/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# --- Node / 浏览器扩展 ---
+node_modules/
+.output/
+.wxt/
+stats.html
+
+# --- 浏览器验证的临时产物 ---
+.playwright-mcp/
+*.log
