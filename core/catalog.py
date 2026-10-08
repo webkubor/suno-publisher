@@ -81,7 +81,10 @@ def claim(track: vc.PendingTrack) -> dict[str, Any]:
     发行名留空 —— 它在「锁定发行身份」那一步才定死，定早了容易和
     别的作品撞名（Suno 一次出两首同名是常态）。
     """
-    _, kw = db.link_clause(track.raw)
+    # 字段名对不上：VoxFlow 端点返回的是 `id`，link_clause 读的是
+    # `source_track_id`。先映射再传 —— 漏了这步会写出一批 source_track_id 为空
+    # 的记录，而发布脚本正是靠它回 VoxFlow 取音频，症状是「认不回作品」。
+    _, kw = db.link_clause({**track.raw, "source_track_id": track.id})
     db.init()
     with db.connect() as c:
         existing = c.execute(
@@ -111,6 +114,21 @@ def get_release(clip_id: str = "", audio_sha256: str = "") -> dict[str, Any] | N
                 return dict(row)
         row = c.execute("SELECT * FROM releases WHERE audio_sha256=?",
                         (audio_sha256,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_release_by_voxflow_id(vox_id: str) -> dict[str, Any] | None:
+    """按 VoxFlow 的 tracks.id 查发行身份。
+
+    这个键**不是权威键**（UUID 重建库会变），只是「手上只有 vox_id」时的便捷
+    入口 —— 比如发布脚本拿到专辑曲目后要回写状态。
+    """
+    if not vox_id:
+        return None
+    db.init()
+    with db.connect() as c:
+        row = c.execute("SELECT * FROM releases WHERE source_track_id=?",
+                        (vox_id,)).fetchone()
         return dict(row) if row else None
 
 
@@ -329,6 +347,26 @@ def get_album(album_id: str, platform: str) -> dict[str, Any] | None:
         row = c.execute("SELECT * FROM albums WHERE key=?",
                         (album_key(platform, album_id),)).fetchone()
         return dict(row) if row else None
+
+
+def get_album_with_tracks(album_id: str, platform: str) -> dict[str, Any] | None:
+    """专辑 + 它的曲目（按 track_no 排）。
+
+    曲目来自 listings 表里 album_key 匹配的行 —— 发行台账拆出独立库后，
+    这里不再 join voxflow 的 tracks，直接用上架记录。发行表单要的文件
+    （音频/封面）由调用方按 source_track_id 去 VoxFlow 端点取。
+    """
+    album = get_album(album_id, platform)
+    if not album:
+        return None
+    key = album_key(platform, album_id)
+    db.init()
+    with db.connect() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT * FROM listings WHERE album_key=? ORDER BY track_no, id", (key,)
+        ).fetchall()]
+    album["tracks"] = rows
+    return album
 
 
 def list_albums(platform: str = "") -> list[dict[str, Any]]:

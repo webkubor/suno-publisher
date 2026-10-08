@@ -14,7 +14,11 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
 # ── 本机数据（不进 git）──────────────────────────────────
-DATA_DIR = HOME / ".suno-publisher"
+# SUNO_PUBLISHER_HOME 可以整体改掉数据目录。存在的理由很实际：
+# 测试要往临时目录写，而测试经常要**起子进程**跑脚本 —— 子进程看不到父进程里
+# 改过的模块属性，只认得到环境变量。没有这个出口，测试只能往真实的
+# ~/.suno-publisher 里写，那等于用测试污染真台账。
+DATA_DIR = Path(os.environ.get("SUNO_PUBLISHER_HOME") or (HOME / ".suno-publisher"))
 CONFIG_DIR = DATA_DIR / "configs"
 DB_PATH = DATA_DIR / "suno-publisher.db"
 OUT_DIR = DATA_DIR / "out"

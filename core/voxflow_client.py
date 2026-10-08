@@ -162,3 +162,39 @@ def _filename_from(disposition: str) -> str:
         if low.startswith("filename="):
             return part[len("filename="):].strip().strip('"')
     return ""
+
+
+def fetch_asset(track_id: str, kind: str = "audio",
+                dest_dir: "Path | None" = None) -> Path:
+    """取资产并落盘，返回本地路径。
+
+    浏览器驱动填表需要**真实文件路径**（DataTransfer 和 CDP 的文件选择器都只认
+    本地文件），所以 HTTP 取回来必须先落地。
+
+    先写 `.part` 再 rename：中途断掉不会留下半个文件被当成完整音频传上去 ——
+    平台对损坏的音频报的是「音频无效」，看不出是本地没下完。
+    """
+    from pathlib import Path
+    import shutil
+
+    dest_dir = Path(dest_dir) if dest_dir else paths.OUT_DIR / "待上传"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stream, filename = asset_stream(track_id, kind)
+    if not filename:
+        # 文件名是判断「平台有没有真的收下」的依据（不能读 input.files），
+        # 拿不到就不能瞎编一个 —— 让它显式失败。
+        stream.close()
+        raise VoxflowError(
+            f"VoxFlow 没给 Content-Disposition 文件名（track={track_id}, kind={kind}）。"
+            f"平台靠文件名判断有没有收下文件，没有名字等于没法确认上传成功。")
+    dest = dest_dir / f"{track_id[:8]}-{filename}"
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    try:
+        with open(tmp, "wb") as f:
+            shutil.copyfileobj(stream, f)
+        stream.close()
+        tmp.replace(dest)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return dest
