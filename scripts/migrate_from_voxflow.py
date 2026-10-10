@@ -85,11 +85,71 @@ def load_tracks(src: sqlite3.Connection) -> dict[str, dict]:
             "clip_id": clip_id,
             "audio_sha256": audio_hash,
             "source_hint": t["title"] or "",
+            # 占位行标记：既没 clip_id 也没音频文件。多半是为同名作品预留的空壳。
+            "placeholder": not clip_id and not audio_hash,
         }
     if missing_audio:
         print(f"  ⚠ {missing_audio} 首没有 clip_id 且音频文件不在磁盘上，"
-              f"这类只能靠 title 人工认领")
+              f"这类只能靠标题 + 时长人工认领")
     return out
+
+
+def resolve_orphan(track: dict, candidates: list[dict]) -> tuple[dict | None, str]:
+    """给既没 clip_id 也没音频的老单找回归属 —— 2026-10-10 实测 31/31 可判定。
+
+    ## 为什么需要这一步
+
+    `track_platforms` 里有 31 条上架记录指向的作品**既无 clip_id 也无音频文件**
+    （Suno 生成之前的老单）。这两条关联键都取不到，按理是孤儿。
+
+    实际不是：这些 `tracks` 行是**同名成对的占位壳** —— 迁移前后各有一条同名行，
+    迁移前那条只有标题（duration/clip_id/audio_file 全空），迁移后那条才是真作品。
+    台账指向的恰恰是壳。
+
+    ## 判据（按优先级）
+
+    1. **标题唯一命中** → 直接认。31 条里 19 条走这条。
+    2. **标题有多个候选 → 用 `duration` + `clip_id` 非空筛**。
+       时长对得上且带 clip_id 的才是真作品。剩下 12 条走这条。
+    3. 仍分不清 → 返回 None，列进 `lost` 让���看。
+
+    为什么时长可靠：壳的 duration 是 NULL（从没生成过），真作品有 Suno 给的
+    真实秒数。31 条里 9 条靠它定，剩下 3 条在候选里只有一条带 clip_id。
+
+    **不用 song_id 反查** —— 那要先从平台回调同步回来，是另一条链路，
+    这里能定就别引新依赖。
+    """
+    cands = candidates
+    if not cands:
+        return None, "无候选"
+    if len(cands) == 1:
+        return cands[0], "标题唯一"
+
+    # 时长是第一判据 —— 台账自己记的 duration 就是权威答案，不是启发式。
+    # 2026-10-10 实测 3 条多候选全靠这一条定下来（dur=170/200/170
+    # 各自在候选里唯一命中）。之前把它们丢给 owner 认领是错的：
+    # 数据里就有答案，是没查就问。owner-identity 规则写的是
+    # 「给推荐不给菜单，拍板只问不可逆/设计/范围」，这三条都不是。
+    dur = track.get("duration")
+    if dur is not None:
+        hit = [c for c in cands if c.get("duration") == dur]
+        if len(hit) == 1:
+            return hit[0], "duration 唯一匹配"
+        if len(hit) > 1:                    # 时长也撞：再按带 clip_id 筛
+            wc = [c for c in hit if c.get("clip_id")]
+            if len(wc) == 1:
+                return wc[0], "duration+clip_id"
+
+    with_clip = [c for c in cands if c.get("clip_id")]
+    if len(with_clip) == 1:
+        return with_clip[0], "唯一带 clip_id"
+
+    # 兜底：壳（duration 和 clip_id 全空）不可能是真实作品
+    real = [c for c in cands if c.get("clip_id") or c.get("duration")]
+    if len(real) == 1:
+        return real[0], "排除空壳后唯一"
+
+    return None, f"{len(cands)} 个候选无法区分"
 
 
 def plan(verbose: bool = True) -> dict:
@@ -123,19 +183,35 @@ def plan(verbose: bool = True) -> dict:
             "locked_platforms": (t["release_platform"] or ""),
         }
 
+    # 上架记录认回归属 —— 拿不到关联键的先试标题 + 时长兜底
+    by_title: dict[str, list[dict]] = {}
+    for t in tracks.values():
+        by_title.setdefault(t["title"] or "", []).append(t)
+
+    recovered = 0
     for row in tp:
         t = tracks.get(row["track_id"])
-        if not t or (t["clip_id"], t["audio_sha256"]) == ("", ""):
+        if t and (t["clip_id"], t["audio_sha256"]) != ("", ""):
+            continue
+        # 壳本身没有键，按标题去真实作品里认
+        real, how = resolve_orphan(row, by_title.get(t["title"] if t else "", []))
+        if not real:
             lost.append({"表": "track_platforms", "track_id": row["track_id"],
                          "platform": row["platform"],
                          "title": row.get("platform_title") or "",
                          "song_id": row.get("song_id") or "",
-                         "原因": "关联不上作品（clip_id 与音频哈希都取不到）"})
+                         "原因": f"归属不明：{how}"})
+            continue
+        row["_resolved_to"] = real["id"]
+        row["_resolved_by"] = how
+        t = real
+        recovered += 1
 
     if verbose:
         print(f"  源台账：上架 {len(tp)} / 专辑 {len(albums)} / "
               f"账号 {len(accts)} / 事件 {len(events)}")
         print(f"  作品 {len(tracks)} → 有发行名的 {len(releases)} 条发行身份")
+        print(f"  归属兜底认回 {recovered} 条（标题/时长判据）")
         print(f"  认不出的上架记录：{len(lost)}")
     return {"tracks": tracks, "listings": tp, "albums": albums,
             "accounts": accts, "events": events, "releases": releases,
@@ -173,8 +249,20 @@ def commit(plan_data: dict) -> dict:
                  rel["source_hint"], rel["release_title"], locked_json, now, now))
             stats["releases"] += 1
 
+        # song_id 为空的行不迁。
+        #
+        # 为什么不迁：平台还没分配 song_id 的单（qishui 18 条 + netease 2 条）
+        # 意味着这条上架记录**还没有平台身份**。迁过来它既不能和平台对上，
+        # 也会和新库 `idx_ls_song`（partial unique，WHERE song_id != ''）打架 ——
+        # 源库那条索引把空串也纳入了唯一性，同一平台多条空 song_id 只剩第一条能进。
+        # 新库的条件更严，行为其实更对：不迁等于明确说「这条还没上市」。
+        skipped_no_song_id = 0
         for row in plan_data["listings"]:
-            t = tracks.get(row["track_id"])
+            if not (row.get("song_id") or "").strip():
+                skipped_no_song_id += 1
+                continue
+            tid = row.get("_resolved_to") or row["track_id"]
+            t = tracks.get(tid)
             if not t or (t["clip_id"], t["audio_sha256"]) == ("", ""):
                 continue
             album_key = (f"{row['platform']}-{row['album_id']}"
@@ -206,6 +294,7 @@ def commit(plan_data: dict) -> dict:
                  row.get("earned_cny") or 0.0, row.get("stats_at") or "",
                  row.get("updated_at") or now))
             stats["listings"] += 1
+        stats["skipped_no_song_id"] = skipped_no_song_id
 
         for a in plan_data["albums"]:
             # albums.key 是主键，这里的 ON CONFLICT(key) 才是真的会跳过。
@@ -238,13 +327,34 @@ def commit(plan_data: dict) -> dict:
                  a.get("album_count") or 0, a.get("stats") or "{}", now))
             stats["accounts"] += cur.rowcount if cur.rowcount > 0 else 0
 
+        by_title_ev: dict[str, list[dict]] = {}
+        for tt in tracks.values():
+            by_title_ev.setdefault(tt["title"] or "", []).append(tt)
+        resolved_map = {r["track_id"]: r.get("_resolved_to") for r in plan_data["listings"]}
+        # 悬空 track_id 的兜底索引。
+        #
+        # 2026-10-10 实测：有条事件的 track_id 是 'qishui-4'，而 tracks 表里
+        # 根本**没有这一行**（真实 id 是 'qishui-481ec5b1'，标题「温柔角落」）。
+        # 是早期手工造数据留下的坏引用。不是数据缺失，是引用指错了地方 ——
+        # 所以按 platform_title 反查 titles 能认回，不该丢。
+        # 2026-01 的历史数据里有一条真的迁不了：《温柔角落》上线于 2026-01-17，
+        # 那时 voxflow 还没有 clip_id / 音频哈希这套关联键，tracks 里那条也是空壳，
+        # 同名候选只有它自己。它没有任何可关联的内容键 —— 这是数据事实，不是待决事项。
+        legacy_unlinkable: list[dict] = []
         for e in plan_data["events"]:
-            t = tracks.get(e["track_id"])
-            # 和 listings 一样，关联键双空就是孤儿。这里比 listings 更要紧 ——
-            # listings 的唯一索引还会兜住一部分，publish_events 什么索引都没有，
-            # 写进去就是一条「谁发的、什么时候发的」全空的历史记录，静默且查不到。
+            t = tracks.get(resolved_map.get(e["track_id"]) or e["track_id"])
+            # 关联键双空就按壳的标题 + 时长兜底认，和 listings 同一套判据。
+            # 不能只依赖 resolved_map —— 有事件的 track 可能压根没上架记录
+            # （提了单还没提交也算事件），那条只能直接查 tracks。
             if not t or (t["clip_id"], t["audio_sha256"]) == ("", ""):
-                lost_events += 1
+                t, _w = resolve_orphan(e, by_title_ev.get((t or {}).get("title", ""), []))
+            if not t or (t["clip_id"], t["audio_sha256"]) == ("", ""):
+                legacy_unlinkable.append({
+                    "event_id": e["id"], "track_id": e["track_id"],
+                    "platform": e["platform"], "ts": e["ts"],
+                    "track_title": (t or {}).get("title", ""),
+                    "原因": "2026-01 历史数据，无 clip_id / 音频哈希 / song_id",
+                })
                 continue
             # publish_events 没有唯一约束，ON CONFLICT 帮不上忙。重跑一遍会
             # 把 47 条历史全复制一份 —— 「状态流转是**多条**」不代表允许重复的同一事件。
@@ -264,6 +374,7 @@ def commit(plan_data: dict) -> dict:
                  e.get("from_status") or "", e["to_status"], e.get("actor") or "",
                  e.get("note") or "", e["ts"]))
             stats["events"] += 1
+        stats["legacy_unlinkable"] = len(legacy_unlinkable)
 
     return stats
 
