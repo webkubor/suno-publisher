@@ -101,6 +101,14 @@ CREATE INDEX IF NOT EXISTS idx_rel_link ON releases(clip_id, audio_sha256);
 CREATE TABLE IF NOT EXISTS listings (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
 {_LINK_COLS}
+    -- 关联键可信度。历史台账里有相当一批上架记录（网易云 2026-01 那批）指向的
+    -- 是 voxflow 早期的空壳 track 行：clip_id 和 audio_file 都是空的，**但记录
+    -- 本身是真的**（有 song_id、有上线日期、有播放量、有收益）。
+    --
+    -- 这些行照样搬进来，一条都不丢 —— 丢掉等于抹掉真实收益历史。
+    -- 关联不上就明说关联不上，记成 'unlinked'，由人后续认领；
+    -- **绝不拿标题去猜一个 clip_id 填进去**（同名歌会串行，猜错比不猜更难查）。
+    link_state     TEXT DEFAULT 'linked',
     platform       TEXT NOT NULL,
     platform_title TEXT DEFAULT '',    -- 平台上的歌名，可以跟 release_title 不同
     status         TEXT NOT NULL,
@@ -182,9 +190,20 @@ CREATE INDEX IF NOT EXISTS idx_pe_link ON publish_events(clip_id, audio_sha256, 
 
 
 def init() -> None:
-    """建库。幂等 —— 每次启动都跑。"""
+    """建库 + 补列。幂等 —— 每次启动都跑。
+
+    `CREATE TABLE IF NOT EXISTS` 对**已存在的表**是空操作：给老库加列它不会做，
+    于是 INSERT 带着新列名去写老表就报 `no such column`。
+    所以补列必须显式 ALTER —— 这正是本仓第一次真库迁移时踩到的。
+    """
     with connect() as conn:
         conn.executescript(SCHEMA)
+        cols = {d[1] for d in conn.execute("PRAGMA table_info(listings)")}
+        if "link_state" not in cols:
+            conn.execute(
+                "ALTER TABLE listings ADD COLUMN link_state TEXT DEFAULT 'linked'")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ls_linkstate ON listings(link_state)")
 
 
 # ── 小工具 ──────────────────────────────────────────────
@@ -226,6 +245,18 @@ def summary() -> dict[str, int]:
             cur.execute(f"SELECT COUNT(*) FROM {t}")  # 表名来自白名单常量，非用户输入
             out[t] = cur.fetchone()[0]
         return out
+
+
+def unlinked_count() -> int:
+    """还没认回作品的上架记录数。
+
+    这些行不是垃圾 —— 它们的 song_id / 上线日期 / 播放量 / 收益都是真的，
+    只是指不回 VoxFlow 的哪首作品。留着等人认领，别当错误清理掉。
+    """
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM listings WHERE link_state='unlinked'"
+        ).fetchone()[0]
 
 
 def orphans() -> list[dict[str, Any]]:
