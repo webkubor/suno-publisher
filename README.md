@@ -112,6 +112,7 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/python tests/test_db.py        # 台账（不需 VoxFlow）
 .venv/bin/python tests/test_contract.py  # 跨仓契约（VoxFlow 没起会跳过）
 .venv/bin/python tests/test_web.py       # 发行服务契约
+.venv/bin/python tests/test_browser.py   # 浏览器驱动的解析逻辑（不需真浏览器）
 ```
 
 前置：VoxFlow 在跑（`cd ~/dev/video/voxflow && .venv/bin/voxflow web`）、
@@ -119,6 +120,28 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 
 发行台的「待发行」要 VoxFlow 在场才能算；VoxFlow 没起时**台账类页面照常可看**，
 待发行那一栏会明确说「连不上 VoxFlow」而不是显示成空列表。
+
+## 收益数据怎么刷新
+
+后台数据**没有公开接口**，只能登录后从渲染页面里抠。两个脚本，**按顺序跑**：
+
+```bash
+# ① 账号级：播放量 / 粉丝 / 可提现收益 —— 实测千播单价的唯一来源
+.venv/bin/python scripts/sync_netease_account.py
+
+# ② 单曲级：近 30 日播放量（收益 = 播放量 × ①算出的单价）
+.venv/bin/python scripts/sync_netease_stats.py
+```
+
+先跑 ①：单曲收益要拿「可提现 ÷ 累计播放」得到的**实测单价**去折算，
+①没跑过时 ②只能回填播放量、折不出收益。
+
+两个都支持 `--dry-run`。驱动走 `core/browser.py`（lite-browser），
+**登录态要人手动登一次** —— 脚本不代持，也不会因为「没登记过」就误报「没登录」。
+没登录时它们干净退出（码 3）并说清怎么做，不给堆栈。
+
+> 其余 12 个同步/发布脚本还在 `scripts/legacy_voxflow/`，**待移植** ——
+> 它们写的是 VoxFlow 已删的表。见那个目录的 README：按类写清了各自该移植到哪。
 
 ## License
 

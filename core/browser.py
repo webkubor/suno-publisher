@@ -80,6 +80,29 @@ def open_page(url: str) -> None:
     _run(["open", url], timeout=120)
 
 
+def _parse_eval_output(out: str) -> Any:
+    """从 lite-browser 的 eval 输出里取出真正的返回值。
+
+    **对所有行都先试 `json.loads`**，不能只对 `{` / `[` / `"` 开头的试：
+    `JSON.stringify(false)` 回显的是 `false`，而 Python 里字符串 `'false'`
+    是**真值**。踩过 —— 登录探针拿它判断「页面上有没有登录入口」，永远得真，
+    于是未登录也报「已登录」，然后去追一个不存在的数据问题。
+
+    独立成函数是为了能单测：这个 bug 靠肉眼看输出发现不了（`'false'` 和
+    `False` 打印出来很像）。
+    """
+    _NOISE = ("🌐", "✅", "📸", "ℹ️", "▶", "💥", "⚠️")
+    for line in reversed(out.strip().splitlines()):
+        line = line.strip()
+        if not line or line.startswith(_NOISE):
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            return line
+    raise BrowserUnavailable(f"页面没返回任何值：{out[-200:]!r}")
+
+
 def evaluate(expr: str, timeout: int = _TIMEOUT) -> Any:
     """在当前页面执行 JS 并取回值。
 
@@ -87,25 +110,9 @@ def evaluate(expr: str, timeout: int = _TIMEOUT) -> Any:
     那要自己管浏览器实例，而登录态就在这个浏览器的 profile 里，另起一个进程
     等于什么都抓不到。
 
-    ## 解析规则：先试 JSON，不成立才当裸字符串
-
-    必须**对所有行**都试 `json.loads`，不能只对 `{` / `[` / `"` 开头的试 ——
-    `JSON.stringify(false)` 回显的是 `false`，而 Python 里字符串 `'false'`
-    是**真值**。踩过：登录探针拿它判断「页面上有没有登录入口」，永远得真，
-    于是未登录也报「已登录」，然后去追一个不存在的数据问题。
-
-    纯字符串结果（`location.href` / `innerText`）json.loads 会失败，原样返回。
+    解析规则见 `_parse_eval_output`（尤其别把它改回「只认 JSON 开头的行」）。
     """
-    out = _run(["eval", expr], timeout=timeout)
-    for line in reversed(out.strip().splitlines()):
-        line = line.strip()
-        if not line or line.startswith(("🌐", "✅", "📸", "ℹ️", "▶", "  ▶", "💥")):
-            continue
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            return line
-    raise BrowserUnavailable(f"页面没返回任何值：{out[-200:]!r}")
+    return _parse_eval_output(_run(["eval", expr], timeout=timeout))
 
 
 def probe_login(login_marker: str = "login") -> bool:
