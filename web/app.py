@@ -248,6 +248,82 @@ def artist() -> dict[str, Any]:
     return catalog.artist_identity()
 
 
+# ── 单位经济学 ──────────────────────────────────────────
+@app.get("/api/economics")
+def economics() -> dict[str, Any]:
+    """「这门生意的账」—— 发行侧的那本。
+
+    为什么归本仓：要回答「这首歌花了多少、发出去回本了吗」，需要**成本**配
+    **收益**。收益是上架之后平台报的数（本仓的 listings / platform_accounts），
+    成本是生成花的钱（voxflow 的 usage_events，从 /api/catalog/costs 取）。
+
+    两边各算各的那半边，**回本结论只在这里产生** —— 两个仓各给一个数迟早对不上，
+    而没人知道该信谁。
+
+    voxflow 连不上时：收益部分照常给（本仓自有数据），成本与回本留空并说明原因。
+    不是 503 —— 这一屏看的主要是收益，上游挂了不该整屏打不开。
+    """
+    from core import revenue
+
+    rates = revenue.platform_rates()
+    per_track = revenue.track_revenue()
+
+    # 全台账合计（含还没认回作品的记录）。
+    # **必须和 per_track 分开报**：那 31 条 unlinked 记录的播放量和收益是真的，
+    # 只是归不到某一首上。只报 per_track 会低报一大截（实测 325 报成 16），
+    # 而看板数字偏小不会报错，只会让人以为「没赚到钱」。
+    ledger = revenue.ledger_totals()
+
+    total_plays = sum(v["plays"] for v in per_track.values())
+    total_earned = round(sum(v["earned_cny"] for v in per_track.values()), 2)
+    avg_breakeven = 0
+
+    # 实测单价：各平台里取「有实测值的那个」的加权口径，取不到就用配置值
+    measured = [v["cny_per_1k_plays"] for v in rates.values()
+                if v["rate_source"] == "measured" and v["cny_per_1k_plays"] > 0]
+    measured_rate = round(sum(measured) / len(measured), 4) if measured else 0.0
+
+    costs: dict[str, Any] = {}
+    cost_error = ""
+    try:
+        costs = vc.costs()
+    except vc.VoxflowUnavailable as e:
+        cost_error = f"连不上 VoxFlow，成本与回本算不了：{e}"
+    except vc.VoxflowError as e:
+        cost_error = f"VoxFlow 取成本失败：{e}"
+
+    total_cost = round(sum(v.get("cost_cny", 0) or 0 for v in costs.values()), 2)
+    covered = [k for k in per_track if k in costs]
+    if costs and measured_rate:
+        per_cost = [v.get("cost_cny", 0) or 0 for v in costs.values()]
+        avg_cost = sum(per_cost) / len(per_cost) if per_cost else 0
+        avg_breakeven = revenue.breakeven_plays(avg_cost, rate_override=measured_rate)
+
+    return {
+        "rates": rates,
+        "per_track": per_track,
+        "ledger": ledger,
+        "summary": {
+            # 全台账口径 —— 「这个账号一共被播了多少、赚了多少」
+            "ledger_plays": ledger["plays"],
+            "ledger_earned_cny": ledger["earned_cny"],
+            # 能归到具体作品的口径 —— 「哪首歌值得再做一首同风格的」
+            "total_plays": total_plays,
+            "total_earned_cny": total_earned,
+            "unlinked_plays": ledger["plays"] - total_plays,
+            "unlinked_earned_cny": round(ledger["earned_cny"] - total_earned, 2),
+            "total_cost_cny": total_cost,
+            "cny_per_1k_plays_measured": measured_rate,
+            "avg_breakeven_plays": avg_breakeven,
+            "tracks_with_cost": len(costs),
+            "tracks_with_revenue": len(per_track),
+            # 成本和收益都有的作品数 —— 只有这些才算得出真正的单曲盈亏
+            "tracks_with_both": len(covered),
+        },
+        "cost_error": cost_error,
+    }
+
+
 # ── UI ──────────────────────────────────────────────────
 @app.get("/")
 def index() -> Response:

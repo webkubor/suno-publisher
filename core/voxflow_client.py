@@ -141,6 +141,20 @@ def catalog() -> list[CatalogTrack]:
     return out
 
 
+def costs() -> dict[str, dict]:
+    """每首作品的生成成本（按 provider 拆）。
+
+    成本是生成侧事实（voxflow 的 usage_events），收益是发行侧事实（本仓的
+    listings）。「回本」要两个数配起来才答得出来 —— 所以成本从这边取，
+    结论在本仓算。
+    """
+    payload = json.loads(_get(_url("/api/catalog/costs")))
+    costs_map = payload.get("costs") if isinstance(payload, dict) else None
+    if not isinstance(costs_map, dict):
+        raise VoxflowError(f"预期 {{'costs': {{...}}}}，实际是 {type(payload).__name__}")
+    return costs_map
+
+
 def asset_stream(track_id: str, kind: str = "audio") -> tuple[BinaryIO, str]:
     """取音频/封面字节流。
 

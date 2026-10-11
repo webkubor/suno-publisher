@@ -127,6 +127,14 @@ CREATE TABLE IF NOT EXISTS listings (
     plays          INTEGER DEFAULT 0,
     earned_cny     REAL DEFAULT 0,
     stats_at       TEXT DEFAULT '',
+    -- 谁负责发的。从 voxflow 的 track_platforms 迁过来（2026-10-11）。
+    --
+    -- 为什么要留：这是**长期要追溯的事实** —— 分成归属、出问题找谁，
+    -- 都要回答「这条是谁发的」。飞书台账里也有，但那是对外视图，可能被误删，
+    -- 也可能哪天不用飞书了。真源得在库里。
+    publisher      TEXT DEFAULT '',
+    publisher_id   TEXT DEFAULT '',
+    assigned_at    TEXT DEFAULT '',
     updated_at     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ls_platform ON listings(platform, status);
@@ -204,6 +212,14 @@ def init() -> None:
                 "ALTER TABLE listings ADD COLUMN link_state TEXT DEFAULT 'linked'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ls_linkstate ON listings(link_state)")
+        # publisher 三兄弟是 2026-10-11 补的（从 voxflow 迁那 9 条「谁负责发的」）。
+        # 老库建表时没有这几列，得显式补 —— CREATE TABLE IF NOT EXISTS 对
+        # 已存在的表是空操作，不补列 INSERT 就会撞 no such column。
+        for col, ddl in (("publisher", "TEXT DEFAULT ''"),
+                         ("publisher_id", "TEXT DEFAULT ''"),
+                         ("assigned_at", "TEXT DEFAULT ''")):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE listings ADD COLUMN {col} {ddl}")
 
 
 # ── 小工具 ──────────────────────────────────────────────
