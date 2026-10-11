@@ -178,23 +178,23 @@ def test_readiness_lyrics_branch():
     「您上传的音频非纯音乐，请填写歌词」，读起来像检测到人声，
     照着错误提示去贴歌词是白费功夫。纯音乐本来就没歌词。
     """
-    from core.voxflow_client import PendingTrack
+    from core.voxflow_client import CatalogTrack
 
     base = dict(id="t1", title="夜航", audio_name="a.m4a", cover_name="c.png",
                 audio_sha256="sha-x", lyrics="", instrumental=True)
-    inst = C.readiness(PendingTrack(**base), "qishui")
+    inst = C.readiness(CatalogTrack(**base), "qishui")
     names = [i["名称"] for i in inst["items"]]
     assert "歌词" not in names, f"纯音乐不该有歌词检查项: {names}"
     assert "已标记为纯音乐（无歌词）" in names, names
 
-    vocal = C.readiness(PendingTrack(**{**base, "instrumental": False,
+    vocal = C.readiness(CatalogTrack(**{**base, "instrumental": False,
                                         "lyrics": ""}), "qishui")
     vnames = [i["名称"] for i in vocal["items"]]
     assert "歌词" in vnames, f"有词作品必须查歌词: {vnames}"
     lyric_item = next(i for i in vocal["items"] if i["名称"] == "歌词")
     assert lyric_item["就绪"] is False, "有词作品没歌词应报缺口"
 
-    vocal_ok = C.readiness(PendingTrack(**{**base, "instrumental": False,
+    vocal_ok = C.readiness(CatalogTrack(**{**base, "instrumental": False,
                                            "lyrics": "夜航不停"}), "qishui")
     assert next(i for i in vocal_ok["items"] if i["名称"] == "歌词")["就绪"] is True
     print("  ✓ 纯音乐走「已标记为纯音乐」，有词作品才查歌词")
@@ -203,9 +203,9 @@ def test_readiness_lyrics_branch():
 def test_readiness_flags_missing_link():
     """关联键缺失要报出来 —— 这种歌入库时会被 link_clause 拦下，
     提前在备料这步看到比入库炸掉好。"""
-    from core.voxflow_client import PendingTrack
+    from core.voxflow_client import CatalogTrack
 
-    t = PendingTrack(id="t2", title="x", audio_name="a.m4a", cover_name="c.png",
+    t = CatalogTrack(id="t2", title="x", audio_name="a.m4a", cover_name="c.png",
                      clip_id="", audio_sha256="")
     r = C.readiness(t, "qishui")
     item = next(i for i in r["items"] if i["名称"].startswith("关联键"))

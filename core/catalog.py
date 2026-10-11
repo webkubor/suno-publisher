@@ -56,16 +56,55 @@ def artist_identity() -> dict[str, Any]:
 
 
 # ── 作品 ────────────────────────────────────────────────
-def pending(platform: str = "qishui") -> list[vc.PendingTrack]:
-    """该平台待发行的曲目。空列表是正常的，连不上会抛 VoxflowUnavailable。"""
-    return vc.pending(platform)
+# 已经交出去的状态。这些状态下的作品不再出现在「待发行」里。
+DONE_STATUSES = ("online", "published", "submitted")
 
 
-def find_pending(track_id: str, platform: str = "qishui") -> vc.PendingTrack | None:
+def _done_keys(platform: str) -> set[tuple[str, str]]:
+    """该平台已上架/已提交记录持有的关联键。"""
+    db.init()
+    marks = ",".join("?" * len(DONE_STATUSES))
+    with db.connect() as c:
+        rows = c.execute(
+            f"SELECT clip_id, audio_sha256 FROM listings "  # noqa: S608
+            f"WHERE platform=? AND status IN ({marks})",
+            (platform, *DONE_STATUSES)).fetchall()
+    return {(r["clip_id"] or "", r["audio_sha256"] or "") for r in rows}
+
+
+def pending(platform: str = "qishui") -> list[vc.CatalogTrack]:
+    """该平台待发行的曲目 = VoxFlow 曲库 − 本仓台账里该平台已交出去的。
+
+    **判据在本仓，不在 VoxFlow**（2026-10-10 改）。原来 VoxFlow 的
+    `/api/release/pending?platform=` 里含平台判断，等于发行语义还长在生成侧。
+    现在 VoxFlow 只回答「生成了什么」，发行状态的唯一真源是本仓的 listings。
+
+    匹配按关联键，**任一个命中即算已发**：有的记录是早期建的、只有
+    audio_sha256 没有 clip_id，只比 clip_id 会让它重复出现在待发行里。
+    空键不参与匹配 —— 拿空串比对会把所有空键记录误判成同一条。
+    """
+    done = _done_keys(platform)
+    out: list[vc.CatalogTrack] = []
+    for t in vc.catalog():
+        if _already_done(t, done):
+            continue
+        out.append(t)
+    return out
+
+
+def _already_done(t: vc.CatalogTrack, done: set[tuple[str, str]]) -> bool:
+    for clip_id, sha in done:
+        if clip_id and clip_id == t.clip_id:
+            return True
+        if sha and sha == t.audio_sha256:
+            return True
+    return False
+
+
+def find_pending(track_id: str, platform: str = "qishui") -> vc.CatalogTrack | None:
     """按 id 在待发行列表里找一首。
 
-    注意范围：只覆盖**还没发过的**。已经发出去的曲子不在 `pending` 里
-    （VoxFlow 那边按「该平台无 online/published/submitted 记录」过滤），
+    注意范围：只覆盖**还没发过的**。已经发出去的曲子不在 `pending` 里，
     要查已发行的记录看本仓的 `listings` 表。
     """
     for t in pending(platform):
@@ -74,7 +113,7 @@ def find_pending(track_id: str, platform: str = "qishui") -> vc.PendingTrack | N
     return None
 
 
-def claim(track: vc.PendingTrack) -> dict[str, Any]:
+def claim(track: vc.CatalogTrack) -> dict[str, Any]:
     """把一首待发行的歌登记成本仓的发行身份（releases 行），返回该行。
 
     幂等：同一个关联键重复调用返回同一行。所以备料流程可以放心重跑。
@@ -175,7 +214,7 @@ def _cover_big_enough(cover_path: "str | None", min_size: str) -> bool:
         return True
 
 
-def readiness(track: vc.PendingTrack, platform: str) -> dict[str, Any]:
+def readiness(track: vc.CatalogTrack, platform: str) -> dict[str, Any]:
     """这首歌发这个平台，备料齐了没有。
 
     返回 {ok, items: [{名称, 就绪, 说明}], 缺口数}。

@@ -106,7 +106,8 @@ def db_summary() -> dict[str, int]:
 def release_pending(platform: str = Query("qishui")) -> JSONResponse:
     """该平台待发行的曲目 + 填表需要的全部元数据。
 
-    判据在 voxflow 那边（有音频、且该平台还没有上架记录），本服务只做转发。
+    **判据在本仓**（2026-10-10 起）：本仓拿 voxflow 的曲库减去自己台账里该平台
+    已交出去的，算出「待发行」。voxflow 只回答「生成了什么」，不认识平台。
     **voxflow 连不上要 503，不能返回空数组** —— 见模块头。
     """
     try:
@@ -115,21 +116,47 @@ def release_pending(platform: str = Query("qishui")) -> JSONResponse:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except vc.VoxflowError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    return JSONResponse([_track_payload(t) for t in rows])
+    return JSONResponse([_track_payload(t, platform) for t in rows])
 
 
-def _track_payload(t: vc.PendingTrack) -> dict[str, Any]:
-    """原样透传 voxflow 的字段，只补一个本仓的发行状态。
+def _track_payload(t: vc.CatalogTrack, platform: str) -> dict[str, Any]:
+    """曲库字段原样透传，再补本仓才知道的那一项。
 
     透传而不是重新组装：字段漏一个，扩展那边的填表就会少填一项，
     而症状是「平台上某个框空着」—— 提交之后才发现。
+
+    `already_released` 必须由本仓补：它问的是「这首在**别的**平台有没有上线」，
+    是发行侧的事实，voxflow 已经不提供也不再知道。
     """
     payload = dict(t.raw) if t.raw else {}
     payload.setdefault("id", t.id)
     payload.setdefault("title", t.title)
     payload.setdefault("clip_id", t.clip_id)
     payload.setdefault("audio_sha256", t.audio_sha256)
+    payload["already_released"] = _released_elsewhere(t, platform)
     return payload
+
+
+def _released_elsewhere(t: vc.CatalogTrack, platform: str) -> bool:
+    """这首在**除该平台以外**有没有已上线记录。
+
+    只算 online/published，不算 submitted —— 提交了但还没上线，对「是否已发行」
+    这个问题来说还不算。这一项会影响平台表单上那个「是否已发行」开关，
+    报错了等于替用户做了一个错误的版权声明。
+    """
+    from core import db
+    db.init()
+    with db.connect() as c:
+        rows = c.execute(
+            "SELECT clip_id, audio_sha256 FROM listings "
+            "WHERE platform != ? AND status IN ('online','published')",
+            (platform,)).fetchall()
+    for r in rows:
+        if r["clip_id"] and r["clip_id"] == t.clip_id:
+            return True
+        if r["audio_sha256"] and r["audio_sha256"] == t.audio_sha256:
+            return True
+    return False
 
 
 @app.get("/api/release/{track_id}/asset/{kind}")
@@ -143,7 +170,7 @@ def release_asset(track_id: str, kind: str) -> Response:
     """
     if kind not in ("audio", "cover"):
         raise HTTPException(status_code=400, detail="kind 只能是 audio 或 cover")
-    url = (f"{paths.VOXFLOW_API.rstrip('/')}/api/release/"
+    url = (f"{paths.VOXFLOW_API.rstrip('/')}/api/catalog/"
            f"{urllib.parse.quote(track_id)}/asset/{kind}")
     try:
         upstream = urllib.request.urlopen(url, timeout=120)  # noqa: S310

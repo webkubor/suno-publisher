@@ -19,13 +19,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core import db  # noqa: E402
 from core import voxflow_client as vc  # noqa: E402
 
-# /api/release/pending 必须带的字段。少一个就是契约破了。
+# /api/catalog/tracks 必须带的字段。少一个就是契约破了。
+#
+# 2026-10-10 改成生成侧契约：VoxFlow 不再返回 release_title / already_released /
+# 平台状态 —— 那些是发行侧自己算的（见 core/catalog.py 的 pending）。
+# 这里仍然卡住关联键：台账在独立 sqlite 里，没有外键，认领作品全靠它们。
 REQUIRED_FIELDS = (
     "id", "title", "lyrics", "instrumental", "music_type", "ai_tool",
-    "already_released", "tags", "album_desc", "duration",
+    "tags", "album_desc", "duration",
     "audio_name", "cover_name", "audio_mb",
-    # 关联键 —— 2026-10-08 补的。发行台账在独立 sqlite 里，没有外键，
-    # 认领作品全靠这两个字段。VoxFlow 少返回一个，所有本地合成的歌都成孤儿。
+    # 关联键 —— 发行台账在独立 sqlite 里，没有外键，认领作品全靠这两个字段。
+    # VoxFlow 少返回一个，所有本地合成的歌都成孤儿。
     "clip_id", "audio_sha256",
 )
 
@@ -63,7 +67,7 @@ def test_unavailable_is_distinct_from_empty():
     old = paths.VOXFLOW_API
     paths.VOXFLOW_API = "http://127.0.0.1:1"   # 必然连不上
     try:
-        vc.pending()
+        vc.catalog()
     except vc.VoxflowUnavailable as e:
         assert "连不上" in str(e), e
         print("  ✓ 连不上抛 VoxflowUnavailable，且消息里给了怎么起服务")
@@ -77,8 +81,8 @@ def test_live_contract():
     if not vc.ping():
         print("  ⏭ 跳过：VoxFlow 没在跑")
         return
-    rows = vc.pending("qishui")
-    assert rows, "待发行列表为空 —— 确认一下曲库里是不是真有歌（空列表本身不算契约破裂）"
+    rows = vc.catalog()
+    assert rows, "曲库为空 —— 确认一下是不是真有作品（空列表本身不算契约破裂）"
     missing = [f for f in REQUIRED_FIELDS if f not in rows[0].raw]
     assert not missing, f"VoxFlow 响应缺字段: {missing}"
     print(f"  ✓ 契约完整：{len(rows)} 条，{len(REQUIRED_FIELDS)} 个字段齐全")
@@ -97,12 +101,13 @@ def test_live_contract():
         db.link_clause(r.raw)
     print("  ✓ 全部通过 link_clause 校验")
 
-    # 发行名撞车是真实存在的（Suno 一次出两首同名），确认唯一索引会拦下来
+    # 生成歌名撞车是常态（Suno 一次出两首同名），**不能拿它当关联键**。
+    # 这里只提示数量，不做判定 —— 撞名本身在生成侧完全正常。
     titles = [r.title for r in rows]
     dupes = len(titles) - len(set(titles))
     if dupes:
-        print(f"  ℹ {dupes} 条发行名撞车，唯一索引会拒绝重名 —— "
-              f"这是预期行为，发出去的歌名必须唯一")
+        print(f"  ℹ {dupes} 条生成歌名撞车 —— 这正是不能用标题当关联键的原因，"
+              f"发行名要到本仓的 releases 表里单独锁定且唯一")
 
 
 if __name__ == "__main__":
