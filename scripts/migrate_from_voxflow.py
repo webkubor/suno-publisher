@@ -51,7 +51,6 @@ import argparse
 import hashlib
 import sqlite3
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -73,13 +72,19 @@ def _sha256_file(path: Path, chunk: int = 1 << 20) -> str:
 def load_tracks(src: sqlite3.Connection) -> dict[str, dict]:
     """voxflow 的 tracks 表 → {track_id: {...含关联键}}。"""
     cols = {d[1] for d in src.execute("PRAGMA table_info(tracks)").fetchall()}
-    want = ["id", "title", "clip_id", "audio_file", "release_title",
-            "release_platform", "duration"]
+    # ⚠️ 只取**库里真有的**列。release_title / release_platform 在 2026-10-11
+    # 随发行拆分从 voxflow 删掉了 —— 写死列名的话，重跑这个脚本会直接
+    # `no such column`，而它的用途恰恰是「万一要重建台账」（那时最不能崩）。
+    want = [c for c in ("id", "title", "clip_id", "audio_file",
+                        "release_title", "release_platform", "duration")
+            if c in cols]
     rows = src.execute(f"SELECT {', '.join(want)} FROM tracks").fetchall()
     out: dict[str, dict] = {}
     missing_audio = 0
     for r in rows:
         t = dict(zip(want, r))
+        t.setdefault("release_title", "")
+        t.setdefault("release_platform", "")
         clip_id = (t["clip_id"] or "").strip()
         audio_hash = ""
         if not clip_id:
@@ -113,9 +118,29 @@ def plan(verbose: bool = True) -> dict:
         raise SystemExit(f"✗ 找不到 voxflow 的库：{VOXFLOW_DB}")
     src = sqlite3.connect(f"file:{VOXFLOW_DB}?mode=ro", uri=True)
     src.row_factory = sqlite3.Row
+
+    # ⚠️ 源表可能已经不在了 —— 2026-10-11 发行拆分落地后，voxflow 侧把
+    # track_platforms / albums / platform_accounts / publish_events 连同数据
+    # 一起删了（数据都已经迁到本仓）。那是**一次性**操作，迁完就没必要重跑。
+    #
+    # 但直接让它撞 `no such table` 会让人以为「迁移坏了、要修」，
+    # 而真相是「已经迁完了、这里是历史脚本」。所以先把话说清楚。
+    have = {r[0] for r in src.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    missing = [t for t in ("track_platforms", "albums", "platform_accounts")
+               if t not in have]
+    if missing:
+        print("✓ 迁移**已经完成**过，不需要重跑。")
+        print(f"  voxflow 侧这些源表已经不存在了：{'、'.join(missing)}")
+        print("  （它们的数据在本仓的 listings / albums / platform_accounts 里。）")
+        print()
+        print("  这个脚本只在一件事上有用：**从别处的旧库副本重建本仓台账**。")
+        print("  那种情况把 VOXFLOW_DB 指向旧副本，见文件头说明。")
+        return {"tracks": {}, "listings": [], "albums": [], "accounts": [],
+                "events": [], "releases": {}, "lost": []}
+
     tracks = load_tracks(src)
 
-    tp_cols = [d[1] for d in src.execute("PRAGMA table_info(track_platforms)").fetchall()]
     tp = [dict(r) for r in src.execute("SELECT * FROM track_platforms").fetchall()]
     albums = [dict(r) for r in src.execute("SELECT * FROM albums").fetchall()]
     accts = [dict(r) for r in src.execute("SELECT * FROM platform_accounts").fetchall()]
@@ -161,7 +186,7 @@ def plan(verbose: bool = True) -> dict:
         print(f"  认不出的上架记录：{len(lost)}")
     return {"tracks": tracks, "listings": tp, "albums": albums,
             "accounts": accts, "events": events, "releases": releases,
-            "lost": lost, "tp_cols": tp_cols}
+            "lost": lost}
 
 
 def commit(plan_data: dict) -> dict:

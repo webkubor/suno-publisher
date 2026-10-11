@@ -155,6 +155,31 @@ def costs() -> dict[str, dict]:
     return costs_map
 
 
+def fill_lyrics(track_id: str, lyrics: str) -> dict:
+    """把歌词补进一首作品。
+
+    **这是唯二的写入口**（另一个是取资产时的转码副作用）。为什么允许写：
+    歌词是生成侧的数据（在 voxflow 的 tracks 里），而「去哪个平台查」要用
+    本仓的 song_id —— 于是只能由本仓查、往那边写。
+    反方向（voxflow 读本仓的库）会把单向依赖变成环。
+
+    那个端点**只填空的、绝不覆盖**已有歌词，也不做模糊匹配 ——
+    本地的是生成时的原文，平台那份可能是编辑过或截断的版本。
+    """
+    body = json.dumps({"lyrics": lyrics}).encode()
+    req = urllib.request.Request(
+        _url(f"/api/catalog/{urllib.parse.quote(track_id)}/lyrics"),
+        data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise VoxflowError(f"VoxFlow 返回 {e.code}：写歌词失败\n{e.read()[:200]!r}") from e
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        raise VoxflowUnavailable(f"连不上 VoxFlow：{e}") from e
+
+
 def asset_stream(track_id: str, kind: str = "audio") -> tuple[BinaryIO, str]:
     """取音频/封面字节流。
 

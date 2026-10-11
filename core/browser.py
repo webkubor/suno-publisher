@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from core.exe import find_exe
@@ -103,6 +104,33 @@ def _parse_eval_output(out: str) -> Any:
     raise BrowserUnavailable(f"页面没返回任何值：{out[-200:]!r}")
 
 
+def wait_for(expr: str, timeout: float = 30.0, interval: float = 1.0,
+             desc: str = "") -> bool:
+    """轮询到 `expr` 为真，或超时。
+
+    **别用固定 sleep 等页面渲染完。** 2026-10-11 踩过：汽水控制台用
+    `time.sleep(6)` 等，实测 5 秒时 `document.body` 已就绪、10 秒时那次 eval
+    却回了空 —— 固定等待要么白等、要么赶不上，而两种失败长得一样
+    （「读不到数据」），分不清是没登录、改版、还是没等够。
+
+    返回是否等到；调用方据此给出**有信息量的**错误。
+    """
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    last: Any = None
+    while _t.monotonic() < deadline:
+        try:
+            last = evaluate(expr)
+        except BrowserUnavailable:
+            last = None          # 页面正在导航时 eval 会失败，不是致命错
+        if last:
+            return True
+        _t.sleep(interval)
+    if desc:
+        print(f"  ⚠ 等「{desc}」超时（{timeout:.0f}s，最后一次得 {last!r}）")
+    return False
+
+
 def evaluate(expr: str, timeout: int = _TIMEOUT) -> Any:
     """在当前页面执行 JS 并取回值。
 
@@ -118,23 +146,41 @@ def evaluate(expr: str, timeout: int = _TIMEOUT) -> Any:
 def probe_login(login_marker: str = "login") -> bool:
     """当前页面看着是登录页吗。
 
-    两个判据，**任一命中就算没登录**：
+    三个判据，**任一命中就算没登录**：
 
     1. URL 里有登录标记（`login?targetUrl=...`）—— 网易云这类 SPA 的典型跳法
-    2. 页面上找得到「登录」入口 —— 有的后台不跳 URL，直接在原地换成登录视图
+    2. 页面上有**恰好是**「登录」的叶子节点 —— 汽水控制台就是这种：
+       URL 不变、`<a>`/`<button>` 一个都没有，整个页面只有两个字「登录」
+    3. 页面主体文本短得像一堵墙（≤ 20 字）且含「登录/扫码/授权」
 
-    两个都不用额外登记，也不依赖平台特定的选择器。用「是否有登录入口」而不是
-    「是否有表格」：**表格没有也可能只是平台改版了**，把改版当成没登录，
-    会让人反复去登录一个本来就登录着的账号。
+    第 2 条原来只查 `a,button`，**漏掉了汽水**（实测 `链接数: 0`）——
+    于是它被判成「已登录」，然后一路跑到「一条作品都没读到」，
+    报错还写着「多半不是没登录」。这就是最该避免的误判：
+    把「没登录」伪装成「平台改版」。
+
+    用「有没有登录入口」而不是「有没有数据表」：**没有表格也可能只是改版了**，
+    把改版当成没登录，会让人反复登录一个本来就登录着的账号。
     """
     loc = str(evaluate("location.href") or "")
     if login_marker.lower() in loc.lower():
         return False
-    # 页面上有没有明显的登录入口（导航栏那个「登录」链接/按钮）
-    has_login_ui = evaluate("""JSON.stringify(
-        [...document.querySelectorAll('a,button')]
-          .some(e => /^\\s*登\\s*录\\s*$/.test(e.innerText || '')))""")
-    return not has_login_ui
+
+    # 叶子节点里有没有恰好是「登录」的（不限于 a/button —— 汽水根本没有）
+    hit = evaluate("""JSON.stringify(
+        [...document.querySelectorAll('*')].some(e =>
+          !e.children.length && /^\\s*登\\s*录\\s*$/.test(e.textContent || '')))""")
+    if hit:
+        return False
+
+    # 兜底：整页文本短得像登录墙
+    try:
+        text = str(evaluate("document.body ? document.body.innerText : ''") or "")
+    except BrowserUnavailable:
+        text = ""
+    short = len(text.strip()) <= 20
+    if short and any(k in text for k in ("登录", "扫码", "授权", "Sign in", "Log in")):
+        return False
+    return True
 
 
 def require_logged_in(url_desc: str, login_marker: str = "login") -> None:
@@ -164,3 +210,76 @@ def close() -> None:
         _run(["close"], timeout=30)
     except Exception:
         pass          # 收尾失败不该盖掉真正的结果
+
+
+# ── 页面操作原语 ─────────────────────────────────────────
+# 移植发布脚本（原来跑在 ego-browser / browser-harness 上）需要的动作。
+# 每条都对应一条踩过的坑，见 publish_qishui.py 的文件头。
+
+def click(selector: str) -> bool:
+    """点一个元素。
+
+    **React 受控组件不认 `el.click()`** —— 在 `evaluate` 里调原生 click，
+    状态不会变（AI 声明就是这么静默失败的）。所以这里走 lite-browser 的
+    click，它发的是真实鼠标事件。
+
+    选择器可以是 CSS，也可以用 `text=xxx` 按文本找（内部先解析成 CSS）。
+    """
+    if selector.startswith("text="):
+        want = selector[len("text="):]
+        ok = evaluate("""JSON.stringify((() => {
+            const el = [...document.querySelectorAll('*')].find(e =>
+              !e.children.length && (e.textContent || '').trim() === %s
+              && e.getBoundingClientRect().width > 0);
+            if (!el) return false;
+            el.setAttribute('data-vf-click', '1');
+            return true;
+        })())""" % json.dumps(want))
+        if not ok:
+            return False
+        try:
+            _run(["click", "[data-vf-click='1']"], timeout=30)
+            return True
+        finally:
+            evaluate("document.querySelector(\"[data-vf-click='1']\")"
+                     "?.removeAttribute('data-vf-click')")
+    try:
+        _run(["click", selector], timeout=30)
+        return True
+    except BrowserUnavailable:
+        return False
+
+
+def insert_text(text: str) -> bool:
+    """往当前焦点输入框整段插入文本。
+
+    **中文要整段 insertText，不要逐字符键入**（规则 4）—— 逐字输入经常只落下
+    第一个字（实测歌名变成「竹」），页面红字报错还看不出原因。
+    """
+    try:
+        _run(["type", ":focus", text], timeout=30)
+        return True
+    except BrowserUnavailable:
+        return False
+
+
+def upload(selector: str, path: "str | Path") -> bool:
+    """给文件输入框投一个本地文件。
+
+    注意 `input.files` 在 React 表单里**不可信**（规则 1）：组件接收后会把
+    files 清空、转存到自己 state。所以「这个槽传了没」不能靠它判断 ——
+    要按页面上有没有显示文件名。
+    """
+    try:
+        _run(["upload", selector, str(path)], timeout=120)
+        return True
+    except BrowserUnavailable:
+        return False
+
+
+def press(key: str) -> bool:
+    try:
+        _run(["press", key], timeout=20)
+        return True
+    except BrowserUnavailable:
+        return False

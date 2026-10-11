@@ -31,7 +31,6 @@ voxflow 占 8866，本服务默认 **8867**。两边同时起互不干扰。
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import urllib.error

@@ -21,7 +21,6 @@ voxflow 那份里发行语义和生成语义混在一个文件、共享一张 `t
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from core import db, paths
@@ -350,6 +349,57 @@ def events(clip_id: str = "", audio_sha256: str = "", limit: int = 50) -> list[d
            + " ORDER BY ts DESC, id DESC LIMIT ?")
     with db.connect() as c:
         return [dict(r) for r in c.execute(sql, (*params, limit)).fetchall()]
+
+
+# ── 平台目录回填 ──────────────────────────────────────────
+# 「从平台公开 API 把作品目录拉回来」这件事有三个脚本要做（网易云 / QQ / 汽水），
+# 写入规则必须一致，所以抽在这里一份。
+_LISTING_FIELDS = (
+    "platform_title", "song_id", "song_url", "status", "album_key", "album_name",
+    "track_no", "duration", "publish_date", "cover_url", "cover_local",
+)
+
+
+def upsert_listing(platform: str, song_id: str, **fields: Any) -> tuple[str, int]:
+    """按 (platform, song_id) 写一条上架记录。返回 ("added"|"updated", row_id)。
+
+    ## 认到的行**不动** link_state / clip_id / audio_sha256
+
+    这三样是「这条记录对应哪首本地作品」的答案。平台目录里**没有**这个信息 ——
+    只有平台歌名和 song_id。所以回填只能写平台侧字段，认领状态一个字不改。
+
+    踩点：如果把 `platform_title` 一起当成认领依据（拿它去猜 clip_id），
+    同名歌会串行（Suno 一次出两首同名）。所以这里的规则是
+    **只认 song_id，认不到就建成 unlinked 等人认领**。
+
+    ## 播放量 / 收益不在这里写
+
+    那两个只有音乐人后台有（`sync_netease_account.py` 等抓）。这里不传就不会覆盖，
+    传空反而会把已抓到的指标冲掉。
+    """
+    bad = set(fields) - set(_LISTING_FIELDS)
+    if bad:
+        raise ValueError(f"不认识的 listings 字段：{sorted(bad)}")
+    if not song_id:
+        raise ValueError("song_id 不能为空 —— 平台目录里它是唯一身份")
+
+    db.init()
+    now = db._now()
+    with db.connect() as c:
+        row = c.execute(
+            "SELECT id FROM listings WHERE platform=? AND song_id=?",
+            (platform, song_id)).fetchone()
+        if row:
+            sets = ", ".join(f"{k}=?" for k in fields)
+            c.execute(f"UPDATE listings SET {sets}, updated_at=? WHERE id=?",  # noqa: S608
+                      (*fields.values(), now, row["id"]))
+            return "updated", row["id"]
+        cols = ["platform", "song_id", "link_state", "updated_at", *fields]
+        vals = [platform, song_id, "unlinked", now, *fields.values()]
+        cur = c.execute(
+            f"INSERT INTO listings ({','.join(cols)}) "  # noqa: S608
+            f"VALUES ({','.join('?' * len(cols))})", vals)
+        return "added", cur.lastrowid
 
 
 # ── 专辑 ────────────────────────────────────────────────
