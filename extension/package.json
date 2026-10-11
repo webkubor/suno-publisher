@@ -2,7 +2,7 @@
   "name": "suno-publisher-extension",
   "version": "0.1.0",
   "private": true,
-  "description": "音乐发行助手 — 把 VoxFlow 曲库的元数据与音频填进音乐平台发行页，停在提交前",
+  "description": "音乐发行助手 — 把本机曲库的元数据与音频填进音乐平台发行页，停在提交前",
   "type": "module",
   "scripts": {
     "dev": "wxt",

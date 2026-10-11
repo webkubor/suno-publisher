@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>suno-publisher · 发行台</title>
+<!--
+  发行台单页 —— 无构建步骤。
+
+  为什么不引前端框架：这一屏只做「读台账 + 看状态」，没有复杂交互。
+  为了它拉一套 vite/vue/naive-ui 进来，等于给一个只读面板配一整条构建链 ——
+  拆仓的目的之一是让两边各自变简单，不是把复杂度原样搬过来。
+  需要复杂交互时再引，届时也是这一个文件的事。
+
+  信息优先级按「发行实际会卡在哪」排：
+    1. 待发行（现在能干什么）
+    2. 待认领（台账里还没关联回作品的 —— 有真实收益，别当垃圾）
+    3. 已上架（历史）
+    4. 平台账号 / 事件流（排查用）
+-->
+<style>
+  :root{
+    --bg:#0f1216; --panel:#161b22; --panel-2:#1c232c; --line:#262d38;
+    --text:#e6edf3; --text-2:#9aa7b4; --text-3:#6b7785;
+    --accent:#4c8dff; --ok:#3fb950; --warn:#d29922; --danger:#f85149;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  header{
+    padding:20px 28px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+  }
+  h1{font-size:17px; margin:0; font-weight:600; letter-spacing:.3px}
+  .sub{color:var(--text-3); font-size:12px}
+  .upstream{margin-left:auto; font-size:12px; display:flex; align-items:center; gap:7px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--text-3);flex:none}
+  .dot.on{background:var(--ok)} .dot.off{background:var(--danger)}
+  main{padding:22px 28px 60px; max-width:1240px; margin:0 auto}
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:12px; margin-bottom:26px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px}
+  .card .n{font-size:24px; font-weight:600; font-variant-numeric:tabular-nums}
+  .card .k{color:var(--text-3); font-size:12px; margin-top:2px}
+  .card.alert{border-color:#5c3a12; background:#1d1710}
+  .card.alert .n{color:var(--warn)}
+  section{margin-bottom:30px}
+  h2{font-size:14px; margin:0 0 12px; font-weight:600; display:flex; align-items:center; gap:9px}
+  h2 .count{color:var(--text-3); font-weight:400; font-size:12px}
+  .tabs{display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap}
+  .tab{
+    padding:5px 13px; border-radius:999px; border:1px solid var(--line);
+    background:transparent; color:var(--text-2); cursor:pointer; font-size:13px;
+  }
+  .tab:hover{border-color:#3a4a5e}
+  .tab.active{background:var(--accent); border-color:var(--accent); color:#fff}  table{width:100%; border-collapse:collapse; font-size:13px}
+  th,td{text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{color:var(--text-3); font-weight:500; font-size:12px; white-space:nowrap}
+  tbody tr:hover{background:var(--panel-2)}
+  .pill{
+    display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px;
+    border:1px solid var(--line); color:var(--text-2); white-space:nowrap;
+  }
+  .pill.online{color:var(--ok); border-color:#1c4a25}
+  .pill.submitted,.pill.reviewing{color:var(--warn); border-color:#5c3a12}
+  .pill.unlinked{color:var(--warn); border-color:#5c3a12}
+  .pill.linked{color:var(--ok); border-color:#1c4a25}
+  .muted{color:var(--text-3)}
+  .num{font-variant-numeric:tabular-nums}
+  .empty{color:var(--text-3); padding:18px 11px; font-size:13px}
+  .warn{
+    background:#1d1710; border:1px solid #5c3a12; border-radius:var(--radius);
+    padding:12px 15px; margin-bottom:18px; font-size:13px; color:#e8d3ac;
+  }
+  .warn b{color:var(--warn)}
+  code{background:var(--panel-2); padding:1px 6px; border-radius:5px; font-size:12px}
+  .scroll{overflow-x:auto}
+  footer{color:var(--text-3); font-size:12px; border-top:1px solid var(--line); padding:16px 28px}
+</style>
+</head>
+<body>
+<header>
+  <h1>发行台</h1>
+  <span class="sub">填表到只差最后一下，那一下留给人</span>
+  <span class="upstream" id="upstream"><span class="dot"></span><span class="txt">检查上游…</span></span>
+</header>
+
+<main>
+  <div id="alert-host"></div>
+
+  <div class="cards" id="counts"></div>
+
+  <section>
+    <h2>待发行 <span class="count" id="pending-count"></span></h2>
+    <div class="tabs" id="pending-tabs"></div>
+    <div class="scroll"><table id="pending-table"></table></div>
+  </section>
+
+  <section>
+    <h2>已上架台账 <span class="count" id="listings-count"></span></h2>
+    <div class="tabs" id="list-tabs"></div>
+    <div class="scroll"><table id="listings-table"></table></div>
+  </section>
+
+  <section>
+    <h2>平台账号 <span class="count" id="acct-count"></span></h2>
+    <div class="scroll"><table id="acct-table"></table></div>
+  </section>
+
+  <section>
+    <h2>状态流转 <span class="count" id="ev-count"></span></h2>
+    <div class="scroll"><table id="ev-table"></table></div>
+  </section>
+</main>
+
+<footer>
+  台账在 <code>~/.suno-publisher/suno-publisher.db</code>（独立库，不与 voxflow 共用）。
+  上游 voxflow 只提供生成产物（曲目元数据 + 音频/封面），本服务是发行侧的唯一入口。
+</footer>
+
+<script>
+'use strict';
+
+const PLATFORMS = [
+  { id: 'qishui',  label: '汽水音乐' },
+  { id: 'netease', label: '网易云音乐' },
+  { id: 'tencent', label: '腾讯音乐人' },
+];
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+async function api(path) {
+  const r = await fetch(path);
+  if (!r.ok) {
+    // 把后端的 detail 带出来 —— 503 的文案是「连不上 voxflow」，
+    // 丢掉它这一屏就只剩「加载失败」，等于白做那个区分。
+    let detail = '';
+    try { detail = (await r.json()).detail || ''; } catch { /* 非 JSON */ }
+    const err = new Error(detail || `HTTP ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+  return r.json();
+}
+
+function table(el, cols, rows, emptyText) {
+  const node = document.querySelector(el);
+  if (!rows.length) {
+    node.innerHTML = `<tbody><tr><td class="empty">${esc(emptyText)}</td></tr></tbody>`;
+    return;
+  }
+  node.innerHTML =
+    `<thead><tr>${cols.map((c) => `<th>${esc(c.h)}</th>`).join('')}</tr></thead>` +
+    `<tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${c.f(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+}
+
+const pill = (v, cls) => `<span class="pill ${esc(cls || v)}">${esc(v || '—')}</span>`;
+const n = (v) => `<span class="num">${Number(v || 0).toLocaleString('zh-CN')}</span>`;
+
+function tabs(el, items, current, onPick) {
+  document.querySelector(el).innerHTML = items.map((it) =>
+    `<button class="tab ${it.id === current ? 'active' : ''}" data-id="${esc(it.id)}">` +
+    `${esc(it.label)}${it.count != null ? ` <span class="muted">${it.count}</span>` : ''}</button>`
+  ).join('');
+  document.querySelectorAll(`${el} .tab`).forEach((b) => {
+    b.onclick = () => onPick(b.dataset.id);
+  });
+}
+
+// ── 状态 ────────────────────────────────────────────────
+const state = { pendingPlatform: 'qishui', listFilter: '' };
+
+async function loadHealth() {
+  const host = document.getElementById('upstream');
+  try {
+    const h = await api('/api/health');
+    const ok = h.voxflow?.reachable;
+    host.innerHTML =
+      `<span class="dot ${ok ? 'on' : 'off'}"></span>` +
+      `<span class="txt">voxflow ${ok ? '正常' : '未连接'}</span>`;
+    if (!ok) {
+      document.getElementById('alert-host').innerHTML =
+        `<div class="warn"><b>上游 voxflow 没在跑。</b>发行需要它提供曲目元数据与音频 —— ` +
+        `台账照常可看。起法：<code>cd ~/dev/video/voxflow && .venv/bin/voxflow web</code></div>`;
+    } else {
+      document.getElementById('alert-host').innerHTML = '';
+    }
+  } catch (e) {
+    host.innerHTML = `<span class="dot off"></span><span class="txt">本服务异常：${esc(e.message)}</span>`;
+  }
+}
+
+async function loadCounts() {
+  const b = await api('/api/board');
+  const c = b.counts || {};
+  const unlinked = (b.platforms ? Object.values(b.platforms) : [])
+    .flatMap((p) => p.listings || []).filter((x) => x.link_state === 'unlinked').length;
+  const cards = [
+    ['待发行', null], ['已上架', c.listings], ['发行身份', c.releases],
+    ['专辑', c.albums], ['平台账号', c.platform_accounts], ['状态事件', c.publish_events],
+  ];
+  let html = '';
+  for (const [k, v] of cards) {
+    if (k === '待发行') { html += `<div class="card"><div class="n" id="pending-n">—</div><div class="k">${k}</div></div>`; continue; }
+    html += `<div class="card"><div class="n">${n(v)}</div><div class="k">${esc(k)}</div></div>`;
+  }
+  // 待认领单独一张告警卡：这些记录带着真实播放量和收益，是待办不是垃圾
+  html += `<div class="card ${unlinked ? 'alert' : ''}"><div class="n">${n(unlinked)}</div>` +
+          `<div class="k">待认领关联</div></div>`;
+  document.getElementById('counts').innerHTML = html;
+}
+
+async function loadPending(platform) {
+  state.pendingPlatform = platform;
+  tabs('#pending-tabs', PLATFORMS.map((p) => ({ id: p.id, label: p.label })),
+       platform, loadPending);
+  const title = PLATFORMS.find((p) => p.id === platform)?.label || platform;
+  try {
+    const rows = await api(`/api/release/pending?platform=${encodeURIComponent(platform)}`);
+    document.getElementById('pending-count').textContent = `${rows.length} 首 · ${title}`;
+    const pn = document.getElementById('pending-n');
+    if (pn) pn.textContent = rows.length;
+    table('#pending-table', [
+      { h: '歌名', f: (r) => esc(r.title) || '<span class="muted">（未命名）</span>' },
+      { h: '类型', f: (r) => r.instrumental ? '<span class="pill">纯音乐</span>' : '<span class="pill">歌曲</span>' },
+      { h: '时长', f: (r) => r.duration ? `${Math.floor(r.duration / 60)}:${String(r.duration % 60).padStart(2, '0')}` : '<span class="muted">—</span>' },
+      { h: '音频', f: (r) => r.audio_mb ? `${Number(r.audio_mb).toFixed(1)} MB` : '<span class="muted">—</span>' },
+      { h: '关联键', f: (r) => r.clip_id ? '<span class="pill linked">clip_id</span>' : '<span class="pill">音频哈希</span>' },
+    ], rows, `「${title}」没有待发行曲目。`);
+  } catch (e) {
+    const msg = e.status === 503
+      ? 'voxflow 没在跑，取不到待发行列表（这不等于「没有歌要发」）。'
+      : e.message;
+    document.getElementById('pending-count').textContent = '';
+    document.querySelector('#pending-table').innerHTML =
+      `<tbody><tr><td class="empty">${esc(msg)}</td></tr></tbody>`;
+  }
+}
+
+async function loadListings(filter) {
+  state.listFilter = filter;
+  const rows = (await api('/api/listings' + (filter ? `?link_state=${filter}` : ''))).listings;
+  const all = (await api('/api/listings')).listings;
+  const unlinkedN = all.filter((x) => x.link_state === 'unlinked').length;
+  tabs('#list-tabs', [
+    { id: '', label: '全部', count: all.length },
+    { id: 'linked', label: '已关联', count: all.length - unlinkedN },
+    { id: 'unlinked', label: '待认领', count: unlinkedN },
+  ], filter, loadListings);
+
+  document.getElementById('listings-count').textContent =
+    `${rows.length} 条` + (filter === 'unlinked' ? ' · 历史都在，只是还没认回作品' : '');
+  table('#listings-table', [
+    { h: '平台', f: (r) => esc(r.platform) },
+    { h: '平台歌名', f: (r) => esc(r.platform_title) || '<span class="muted">—</span>' },
+    { h: '状态', f: (r) => pill(r.status) },
+    { h: 'song_id', f: (r) => r.song_id ? `<code>${esc(r.song_id)}</code>` : '<span class="muted">—</span>' },
+    { h: '关联', f: (r) => pill(r.link_state || 'linked') },
+    { h: '上线', f: (r) => esc(r.publish_date) || '<span class="muted">—</span>' },
+    { h: '播放', f: (r) => n(r.plays) },
+    { h: '收益', f: (r) => `¥${Number(r.earned_cny || 0).toFixed(2)}` },
+  ], rows, '没有上架记录。');
+}
+
+async function loadAccounts() {
+  const accts = await api('/api/platform-accounts');
+  const rows = Object.values(accts);
+  document.getElementById('acct-count').textContent = `${rows.length} 个`;
+  table('#acct-table', [
+    { h: '平台', f: (r) => esc(r.label || r.platform) },
+    { h: '艺人名', f: (r) => esc(r.artist_name) || '<span class="muted">—</span>' },
+    { h: '作品数', f: (r) => n(r.song_count) },
+    { h: '专辑数', f: (r) => n(r.album_count) },
+    { h: '主页', f: (r) => r.artist_url ? `<a href="${esc(r.artist_url)}" target="_blank" rel="noopener" style="color:var(--accent)">打开</a>` : '<span class="muted">—</span>' },
+  ], rows, '还没有平台账号记录。');
+}
+
+async function loadEvents() {
+  const rows = (await api('/api/events?limit=60')).events;
+  document.getElementById('ev-count').textContent = `${rows.length} 条`;
+  table('#ev-table', [
+    { h: '时间', f: (r) => `<span class="muted">${esc((r.ts || '').replace('T', ' '))}</span>` },
+    { h: '平台', f: (r) => esc(r.platform) },
+    { h: '流转', f: (r) => `${pill(r.from_status)} → ${pill(r.to_status)}` },
+    { h: '关联', f: (r) => (r.clip_id || r.audio_sha256) ? '<span class="pill linked">有</span>' : '<span class="pill unlinked">无</span>' },
+    { h: '备注', f: (r) => `<span class="muted">${esc(r.note)}</span>` },
+  ], rows, '还没有状态流转记录。');
+}
+
+(async function boot() {
+  await loadHealth();
+  await loadCounts().catch((e) => { document.getElementById('counts').innerHTML = `<div class="warn">台账读取失败：${esc(e.message)}</div>`; });
+  await Promise.all([
+    loadPending(state.pendingPlatform),
+    loadListings(''),
+    loadAccounts().catch(() => {}),
+    loadEvents().catch(() => {}),
+  ]);
+})();
+</script>
+</body>
+</html>

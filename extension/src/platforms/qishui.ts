@@ -8,7 +8,7 @@
  *
  * ⚠️ 平台改版后这里会过时。真源仍是 voxflow 那份 JSON —— 改规则先改那边，再同步到这。
  */
-import type { Track } from '@/lib/voxflow'
+import type { Track } from '@/lib/publisher'
 
 /** 全局行为约束：做什么、绝不做什么 */
 export const SYSTEM = `你在帮一位独立音乐人把一首歌填进汽水音乐的发行表单。

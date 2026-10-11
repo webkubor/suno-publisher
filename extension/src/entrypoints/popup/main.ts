@@ -4,7 +4,7 @@
  *
  * API Key 只存 chrome.storage.local，且只在 content script 里用于调模型；不上传任何地方。
  */
-import type { Track } from '@/lib/voxflow'
+import type { Track } from '@/lib/publisher'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const sel = $<HTMLSelectElement>('track')
@@ -24,7 +24,7 @@ async function init() {
   if (!r?.ok) {
     sel.innerHTML = '<option>取不到曲目</option>'
     tip.className = 'tip err'
-    tip.textContent = r?.error || '连不上 VoxFlow'
+    tip.textContent = r?.error || '连不上发行服务'
     return
   }
   tracks = r.tracks

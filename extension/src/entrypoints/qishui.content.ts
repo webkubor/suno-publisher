@@ -10,7 +10,7 @@
 import { PageAgent, tool } from 'page-agent'
 import { z } from 'zod/v4'
 import { setFile, pageShowsFile, redErrors, sleep } from '@/lib/dom'
-import { b64ToFile, type AssetReply, type Track } from '@/lib/voxflow'
+import { b64ToFile, type AssetReply, type Track } from '@/lib/publisher'
 import { SYSTEM, pageInstructions, maskIrreversible } from '@/platforms/qishui'
 
 export default defineContentScript({
@@ -64,7 +64,7 @@ async function run(track: Track, llm: LlmCfg) {
       // ② LLM 摸不到本地文件，这一步只能由代码做
       upload_track_asset: tool({
         description:
-          '把本机 VoxFlow 曲库里的音频或封面投递进页面的上传框。页面上的文件选择对话框你点不开，传文件一律用这个工具。',
+          '把本机曲库（经发行服务）的音频或封面投递进页面的上传框。页面上的文件选择对话框你点不开，传文件一律用这个工具。',
         inputSchema: z.object({
           asset: z.enum(['audio', 'cover']).describe('audio = 完整版音频，cover = 专辑封面'),
         }),
@@ -92,7 +92,7 @@ async function run(track: Track, llm: LlmCfg) {
   })
 
   // 需要人拍板时问人，而不是自己猜
-  agent.onAskUser = async (q) => window.prompt(`VoxFlow 发行助手需要你确认：\n\n${q}`) || ''
+  agent.onAskUser = async (q) => window.prompt(`Suno Publisher 发行助手需要你确认：\n\n${q}`) || ''
 
   const result = await agent.execute(
     `把《${track.title}》填进汽水音乐的发行表单。一路填到「签署协议」那一步之前为止，不要提交。`,

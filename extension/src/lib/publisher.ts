@@ -1,10 +1,12 @@
 /**
- * VoxFlow 本地曲库客户端
- * API 来源：VoxFlow 的 FastAPI（默认 http://127.0.0.1:8000）
+ * 发行服务客户端（suno-publisher 自己的 web/app.py，默认 http://127.0.0.1:8867）
  *   GET /api/release/pending?platform=qishui   待发行曲目 + 元数据
  *   GET /api/release/{track_id}/asset/{kind}   音频或封面的字节流（kind: audio | cover）
  *
- * 资产只在本机 127.0.0.1 上流转，不出网 —— 这是 VoxFlow「音频不出本机」的延续。
+ * 扩展只认发行服务这一个端口。音频的源头是 voxflow（生成产物），但由发行服务
+ * 转取 —— 扩展不需要知道 voxflow 在哪，voxflow 也不需要知道有扩展。
+ *
+ * 资产只在本机 127.0.0.1 上流转，不出网。
  */
 
 /** 一首待发行曲目的完整元数据，字段对齐 voxflow 的 tracks 表 */

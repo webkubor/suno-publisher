@@ -1,25 +1,33 @@
 /**
- * Service worker —— 唯一能访问 VoxFlow 本地 API 的地方
+ * Service worker —— 唯一能访问本机发行服务的地方
  *
  * 为什么不在 content script 里直接 fetch：MV3 起 content script 的跨域请求受 CORS 约束，
  * 不再继承扩展权限。background 有 host_permissions，不受此限。
  */
-import type { Msg, AssetReply } from '@/lib/voxflow'
+import type { Msg, AssetReply } from '@/lib/publisher'
 
 /**
- * VoxFlow 的本地服务地址。
+ * suno-publisher 发行服务的地址。
  *
- * 端口从 voxflow-publisher 挪过来时改过一次：那边硬编码 8000，而 VoxFlow 的 web
- * 入口起在 8866（`uvicorn.run(app, host="0.0.0.0", port=8866)`）—— 8000 那个端口
- * 根本没人监听。也就是说原扩展在默认配置下**连不上**。
+ * 2026-10-10 改指向：原来打的是 VoxFlow 的 8866，那时发行端点还长在 voxflow 上。
+ * 拆仓之后发行归本仓，voxflow 不再暴露 `/api/release/*` —— 继续打 8866 会在
+ * voxflow 删掉那些端点后变成 404，而症状是「填表取不到音频」而不是「配置过期」。
  *
- * 放进 chrome.storage 是为了改端口不必重新打包，popup 里可写。
+ * 本仓的发行服务默认 8867，它是发行侧的**唯一**入口：扩展只认这一个端口，
+ * 音频由它向 voxflow 转取（voxflow 仍在 8866 提供生成产物）。
+ *
+ * 放进 chrome.storage 是为了改地址不必重新打包，popup 里可写。
  */
-const DEFAULT_BASE = 'http://127.0.0.1:8866'
+const DEFAULT_BASE = 'http://127.0.0.1:8867'
+
+/** 旧版本存的是 `voxflowBase`（那时地址指向 voxflow）。老用户升级后配置还在，
+ *  直接换 key 会让他们手里改过的地址**静默失效**、退回默认值 —— 所以两个都读。 */
+const STORAGE_KEY = 'publisherBase'
+const LEGACY_KEY = 'voxflowBase'
 
 async function baseUrl(): Promise<string> {
-  const got = await chrome.storage.local.get('voxflowBase')
-  return (got.voxflowBase as string) || DEFAULT_BASE
+  const got = await chrome.storage.local.get([STORAGE_KEY, LEGACY_KEY])
+  return (got[STORAGE_KEY] as string) || (got[LEGACY_KEY] as string) || DEFAULT_BASE
 }
 
 /**
@@ -63,12 +71,12 @@ export default defineBackground(() => {
       try {
         if (msg.kind === 'pending') {
           const r = await fetch(`${base}/api/release/pending?platform=${encodeURIComponent(msg.platform)}`)
-          if (!r.ok) throw new Error(`VoxFlow ${r.status}`)
+          if (!r.ok) throw new Error(`发行服务 ${r.status}`)
           sendResponse({ ok: true, tracks: await r.json() })
           return
         }
         const r = await fetch(`${base}/api/release/${msg.trackId}/asset/${msg.asset}`)
-        if (!r.ok) throw new Error(`VoxFlow ${r.status}`)
+        if (!r.ok) throw new Error(`发行服务 ${r.status}`)
         const reply: AssetReply = {
           ok: true,
           b64: await toB64(r),
@@ -77,11 +85,11 @@ export default defineBackground(() => {
         }
         sendResponse(reply)
       } catch (e) {
-        // VoxFlow 没起是最常见的失败，错误要说人话 —— 尤其要把端口写出来，
+        // 服务没起是最常见的失败，错误要说人话 —— 尤其要把地址写出来，
         // 因为「连不上」最常见的原因就是端口不对
-        const port = (() => { try { return new URL(base).port || '8866' } catch { return '8866' } })()
+        const port = (() => { try { return new URL(base).port || '8867' } catch { return '8867' } })()
         const hint = String(e).includes('Failed to fetch')
-          ? `连不上 VoxFlow（${base}）—— 先起服务：cd ~/dev/video/voxflow && .venv/bin/python -m uvicorn web.app:app --port ${port}`
+          ? `连不上发行服务（${base}）—— 先起它：cd ~/dev/video/suno-publisher && .venv/bin/python -m uvicorn web.app:app --port ${port}`
           : String(e)
         sendResponse({ ok: false, error: hint })
       }

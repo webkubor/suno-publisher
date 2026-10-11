@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { maskIrreversible, pageInstructions } from '../src/platforms/qishui.ts'
-import { b64ToFile } from '../src/lib/voxflow.ts'
+import { b64ToFile } from '../src/lib/publisher.ts'
 
 const track = {
   id: 't1', title: '快乐的社恐', lyrics: '', instrumental: true, tags: '',
