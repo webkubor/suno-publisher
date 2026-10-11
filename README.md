@@ -1,36 +1,52 @@
 # Suno Publisher
 
-音乐发行工具 —— 把 AI 生成的歌填进音乐平台的发行表单，**填到只差最后一下，那一下留给人**。
+AI 音乐发行台 —— 把生成好的歌送进音乐平台的发行表单，**填到只差最后一下，那一下留给人**。
 
 从 [VoxFlow](https://github.com/webkubor/voxflow) 拆出来的独立仓。VoxFlow 收敛为纯 AI
-音频生成工具（语音克隆 / 音色设计 / 播客 / BGM / Suno 音乐生成），发行这半截整体搬到这里。
+音频生成工具（语音克隆 / 音色设计 / 播客 / BGM / Suno 音乐生成），发行这半截整体搬到这里，
+**连界面一起**。
 
 ## 和 VoxFlow 的关系
 
+单向依赖：本仓依赖 VoxFlow 提供生成产物，VoxFlow **不知道「发行」存在**。
+
 ```
 ┌─────────────────┐   HTTP    ┌──────────────────┐
-│    VoxFlow      │ ────────► │  Suno Publisher  │
+│    VoxFlow      │ ◄──────── │  Suno Publisher  │
 │  只管生成        │  取资产    │  只管发行        │
 │                 │           │                  │
 │ tracks / usage  │  clip_id  │ releases         │
 │ events / 音色库  │  音频      │ listings         │
 └─────────────────┘           │ albums           │
                               │ platform_accounts│
-                              │ publish_events   │
-                              └──────────────────┘
+      Chrome 扩展 ──────────► │ publish_events   │
+      （只认这一个端口）        └──────────────────┘
 ```
 
 两个仓**不共用 sqlite 文件**。VoxFlow 的 `core/db.py` 写明它的设计前提是「本地单用户工具」，
 两个独立发版的仓同时开一个库，`timeout=10` 的锁等待迟早炸 `database is locked`。
 
-VoxFlow 作为本机长驻服务提供发行资产，本仓通过 HTTP 取，**不读它的数据目录**：
+VoxFlow 作为本机长驻服务提供**生成产物**，本仓通过 HTTP 取，**不读它的数据目录**：
 
 | 端点 | 用途 |
 |---|---|
-| `GET /api/release/pending?platform=<p>` | 该平台待发行的曲目 + 填表需要的全部元数据 |
-| `GET /api/release/{track_id}/asset/{kind}` | 音频 / 封面字节流（`kind ∈ audio\|cover`） |
+| `GET /api/catalog/tracks` | 有音频的作品 + 生成元数据（含跨库关联键） |
+| `GET /api/catalog/{track_id}/asset/{kind}` | 音频 / 封面字节流（`kind ∈ audio\|cover`） |
 
 默认 `http://127.0.0.1:8866`，用 `VOXFLOW_API` 环境变量覆盖。
+
+### 「待发行」是本仓算的，不是 VoxFlow 说的
+
+VoxFlow 只回答「生成了什么」，**响应里不出现 platform / release_title / already_released**。
+「这首在汽水还没发过」由本仓拿曲库减去自己 `listings` 里的记录算出来
+（`core/catalog.py: pending()`）—— 发行状态的**唯一真源**在本仓。
+
+## 已经有什么
+
+- **发行服务**（`web/app.py`，默认 8867）：发行侧的唯一入口，Chrome 扩展和发行台都打它。
+- **发行台**（`web/ui/index.html`）：待发行 / 待认领 / 已上架 / 平台账号 / 状态流转，无构建步骤。
+- **台账**（`core/db.py`）：releases / listings / albums / platform_accounts / publish_events 五张表。
+- **Chrome 扩展**（`extension/`）：填表自动化，含不可逆动作护栏。
 
 ## 怎么关联回 VoxFlow 的作品
 
@@ -41,8 +57,14 @@ VoxFlow 作为本机长驻服务提供发行资产，本仓通过 HTTP 取，**�
 3. `source_track_id` —— VoxFlow 的 `tracks.id`，**仅作展示提示不是权威键**（UUID 会变）
 4. `source_hint` —— 标题快照，纯给人看
 
-两个键同时为空时 `core/db.py:link_clause()` **当场报错**，不静默写库 —— 孤儿记录在
-「查这首歌发到哪了」时表现为「查无此曲」，极难排查。
+两个键同时为空时 `core/db.py:link_clause()` **当场报错**，不静默写库。
+
+**关联不上的历史记录照搬不丢**，标 `link_state='unlinked'` 待人工认领
+（它们带着真实的 song_id / 上线日期 / 播放量 / 收益，不是垃圾数据）：
+
+```sql
+SELECT * FROM listings WHERE link_state = 'unlinked';
+```
 
 ## 平台知识是个人资产，不进仓库
 
@@ -81,10 +103,22 @@ cp configs/platforms.example.json ~/.suno-publisher/configs/platforms.json
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python tests/test_db.py     # 自检
+
+# 1) 起发行服务（发行侧唯一入口，扩展和发行台都打它）
+.venv/bin/python -m uvicorn web.app:app --port 8867
+#    然后打开 http://127.0.0.1:8867 就是发行台
+
+# 2) 自检
+.venv/bin/python tests/test_db.py        # 台账（不需 VoxFlow）
+.venv/bin/python tests/test_contract.py  # 跨仓契约（VoxFlow 没起会跳过）
+.venv/bin/python tests/test_web.py       # 发行服务契约
 ```
 
-前置：VoxFlow 在跑、浏览器已登录音乐平台（用日常那个浏览器，登录态天然可用）。
+前置：VoxFlow 在跑（`cd ~/dev/video/voxflow && .venv/bin/voxflow web`）、
+浏览器已登录音乐平台（用日常那个浏览器，登录态天然可用）。
+
+发行台的「待发行」要 VoxFlow 在场才能算；VoxFlow 没起时**台账类页面照常可看**，
+待发行那一栏会明确说「连不上 VoxFlow」而不是显示成空列表。
 
 ## License
 
